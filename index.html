@@ -843,7 +843,7 @@ function buildSummaryTable(){
     {t:'n',l:'NET FROM OPERATION',   d:MO.map((_,i)=>{ const o=getOutflow(i); return eff(fc.inflow,BGT.inflow)[i]-o.total; })},
     {t:'h',l:'BELOW GOP'},
     {t:'s',l:'Incentive Fee',        d:efIncFee,  akey:'below'},
-    {t:'s',l:'Remittance to Owner',  d:efRemit,   akey:'below'},
+    {t:'s',l:'Remittance to Owner',  d:efRemit,   akey:'manual'},
     {t:'s',l:'Below GOP Expense',    d:efBlwGOP,  akey:'below'},
     {t:'s',l:'Capex + OE (Actual)',  d:MO.map((_,i)=>(fc.capex[i]??BGT.capex[i])+(fc.oe[i]??0))},
     {t:'n',l:'NET CASH FLOW',        d:nets, key:'net'},
@@ -952,7 +952,7 @@ function getBelowRatios(i){
   const r = getBelowRatiosDef(i);
   return {
     incFee: fc.incFee[i] !== null ? fc.incFee[i] : +(inf * r.incFee).toFixed(3),
-    remit:  fc.remit[i]  !== null ? fc.remit[i]  : +(inf * r.remit).toFixed(3),
+    remit:  fc.remit[i]  !== null ? fc.remit[i]  : BGT.remit[i],   // ← กรอกเองเสมอ, default = Budget
     blwGOP: fc.blwGOP[i] !== null ? fc.blwGOP[i] : +(inf * r.blwGOP).toFixed(3),
   };
 }
@@ -1154,11 +1154,10 @@ function renderUpdBody(){
     </div>
     <div style="background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.18);border-radius:8px;
          padding:9px 13px;margin-bottom:12px;font-size:12px;color:#a78bfa;line-height:1.6;">
-      💡 คำนวณอัตโนมัติจากสัดส่วน Budget ต่อ Inflow — กด <strong>✏️ แก้เอง</strong> เพื่อ override<br>
+      💡 Incentive Fee และ Below GOP คำนวณอัตโนมัติจาก % Budget<br>
+      <span style="color:var(--yellow);font-size:11px">💰 Remittance to Owner — กรอกเองตามที่ตกลงกับ Owner</span><br>
       <span style="color:var(--muted);font-size:11px">
-        สัดส่วน Budget ${m}:
         Incentive ${(getBelowRatiosDef(i).incFee*100).toFixed(1)}% &nbsp;|&nbsp;
-        Remittance ${(getBelowRatiosDef(i).remit*100).toFixed(1)}% &nbsp;|&nbsp;
         Below GOP ${(getBelowRatiosDef(i).blwGOP*100).toFixed(1)}%
       </span>
     </div>
@@ -1170,7 +1169,6 @@ function renderUpdBody(){
           const rd  = getBelowRatiosDef(i);
           return [
             ['Incentive Fee',      'incFee', BGT.incFee[i],  bel.incFee,  fc.incFee[i]===null,  rd.incFee],
-            ['Remittance to Owner','remit',  BGT.remit[i],   bel.remit,   fc.remit[i]===null,   rd.remit],
             ['Below GOP Expense',  'blwGOP', BGT.blwGOP[i],  bel.blwGOP,  fc.blwGOP[i]===null,  rd.blwGOP],
           ].map(([label, fkey, bgtVal, val, isAuto, rat])=>{
             const overBtn = inf!==null
@@ -1197,7 +1195,23 @@ function renderUpdBody(){
               ${valHtml}
               <td>${fd(bgtVal,val)}</td>
             </tr>`;
-          }).join('');
+          }).join('')
+          // Remittance — กรอกเองเสมอ (เงินโอนให้ Owner)
+          + `<tr>
+            <td>
+              <span style="color:var(--muted)">Remittance to Owner</span>
+              <span style="font-size:9px;color:var(--yellow);margin-left:6px;font-family:'JetBrains Mono',monospace">กรอกเอง</span>
+            </td>
+            <td style="color:var(--muted);text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px">${BGT.remit[i].toFixed(3)}</td>
+            <td class="editable">
+              <input class="cei" type="number" step="0.001"
+                value="${fc.remit[i]!==null ? fc.remit[i].toFixed(3) : ''}"
+                placeholder="กรอกยอดโอน Owner..."
+                inputmode="decimal"
+                onchange="onSubCell(this,'remit',${i})">
+            </td>
+            <td>${fd(BGT.remit[i], fc.remit[i])}</td>
+          </tr>`;
         })()}
       </tbody>
     </table></div>
@@ -1318,11 +1332,11 @@ function saveUpd(idx){
     if(fc.opEx[idx]===null)    fc.opEx[idx]=out.opEx;
     if(fc.mktFee[idx]===null)  fc.mktFee[idx]=out.mktFee;
     if(fc.baseMgt[idx]===null) fc.baseMgt[idx]=out.baseMgt;
-    // lock Below GOP auto values
+    // lock Below GOP auto values (ยกเว้น remit — กรอกเองเสมอ)
     const bel=getBelowRatios(idx);
     if(fc.incFee[idx]===null) fc.incFee[idx]=bel.incFee;
-    if(fc.remit[idx]===null)  fc.remit[idx]=bel.remit;
     if(fc.blwGOP[idx]===null) fc.blwGOP[idx]=bel.blwGOP;
+    // remit ไม่ lock auto — FC ต้องกรอกเอง
   }
   saveAll();
   toast(`✅ บันทึก ${MO[idx]} เรียบร้อย`);
