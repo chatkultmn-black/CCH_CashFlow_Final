@@ -1397,39 +1397,54 @@ function renderRev(){
   const alerts=calcAlerts();
   const rows=MO.map((m,i)=>{
     const inf=eff(fc.inflow,BGT.inflow)[i];
-    const out=BGT.opEx[i]+BGT.mktFee[i]+BGT.baseMgt[i]+BGT.incFee[i]+BGT.remit[i]+BGT.blwGOP[i];
+    const out=getOutflow(i).total + getBelowRatios(i).incFee + getBelowRatios(i).remit + getBelowRatios(i).blwGOP;
     const cap=(fc.capex[i]??BGT.capex[i])+(fc.oe[i]??0);
     return{m,i,inf,infB:BGT.inflow[i],out,cap,net:nets[i],bank:fc.bank[i]};
   });
 
   g('prev').innerHTML=`
-    <div class="alert-wrap">${alertBlock(alerts,5)}</div>
-    <div class="rev-grid">
-      <div class="rcard">
-        <h3>📊 Forecast vs Budget — รายเดือน</h3>
-        ${rows.map(r=>`<div class="rrow">
-          <span class="rlk">${r.m}</span>
-          <span class="rlv" style="color:${r.inf>=r.infB?'var(--green)':r.inf/r.infB<.8?'var(--red)':'var(--yellow)'}">
-            ${r.inf.toFixed(2)}M ${r.inf>=r.infB?'▲':'▼'} ${r.infB.toFixed(2)}M
-          </span></div>`).join('')}
-        <div class="rrow" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:700;">
-          <span>Total Net CF</span>
-          <span class="rlv" style="color:${totNet>=0?'var(--green)':totNet>-2?'var(--yellow)':'var(--red)'}">
-            ${totNet.toFixed(3)}M
-          </span>
+    <div class="alert-wrap">${alertBlock(alerts,3)}</div>
+
+    <!-- Chart 1: Forecast vs Budget Bar -->
+    <div class="rcard" style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <h3 style="margin:0">📊 Forecast vs Budget — รายเดือน</h3>
+        <div style="display:flex;gap:12px;font-size:11px;">
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:#38bdf8;display:inline-block"></span>Forecast</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:rgba(56,189,248,.25);border:1px solid #38bdf8;display:inline-block"></span>Budget</span>
         </div>
       </div>
-      <div class="rcard">
-        <h3>🏦 Bank Balance vs Net CF</h3>
-        ${rows.map(r=>`<div class="rrow">
-          <span class="rlk">${r.m}</span>
-          <span class="rlv">${r.bank!==null
-            ?`<span style="color:${r.bank<THR.bankCrit?'var(--red)':r.bank<THR.bankLow?'var(--yellow)':'var(--teal)'}">${r.bank.toFixed(2)}M</span>
-               <span style="color:var(--muted);font-size:10px"> CF:${r.net.toFixed(2)}M</span>`
-            :`<span style="color:var(--faint)">ยังไม่กรอก</span>`}
-          </span></div>`).join('')}
+      <div style="position:relative;height:200px;">
+        <canvas id="chartFCvsBGT"></canvas>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:12px;">
+        <span style="color:var(--muted)">Total Net CF</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:${totNet>=0?'var(--green)':totNet>-2?'var(--yellow)':'var(--red)'}">${totNet.toFixed(3)}M</span>
       </div>
     </div>
+
+    <!-- Chart 2: Net CF bar (positive/negative) -->
+    <div class="rcard" style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <h3 style="margin:0">💰 Net Cash Flow รายเดือน</h3>
+        <div style="display:flex;gap:12px;font-size:11px;">
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:#4ade80;display:inline-block"></span>บวก</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:#f87171;display:inline-block"></span>ลบ</span>
+        </div>
+      </div>
+      <div style="position:relative;height:180px;">
+        <canvas id="chartNetCF"></canvas>
+      </div>
+    </div>
+
+    <!-- Chart 3: Bank Balance line -->
+    <div class="rcard" style="margin-bottom:14px;">
+      <h3 style="margin-bottom:14px">🏦 Bank Balance vs Net CF</h3>
+      <div style="position:relative;height:180px;">
+        <canvas id="chartBank"></canvas>
+      </div>
+    </div>
+
     <div class="shdr"><div class="stitle">Full Review Table</div></div>
     <div class="tw"><table>
       <thead><tr>
@@ -1454,6 +1469,138 @@ function renderRev(){
       }).join('')}</tbody>
     </table></div>
   `;
+
+  // Draw charts after DOM ready
+  requestAnimationFrame(()=>drawRevCharts(rows, nets));
+}
+
+function drawRevCharts(rows, nets){
+  // Load Chart.js if not loaded
+  if(typeof Chart === 'undefined'){
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    s.onload = ()=>_drawCharts(rows, nets);
+    document.head.appendChild(s);
+  } else {
+    _drawCharts(rows, nets);
+  }
+}
+
+function _drawCharts(rows, nets){
+  const labels = MO;
+  const isDark = true;
+  const gridColor = 'rgba(30,64,96,.6)';
+  const tickColor = '#7da8c0';
+  const baseOpts = {
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{display:false}, tooltip:{
+      backgroundColor:'rgba(13,27,42,.95)',
+      titleColor:'#e8f4f8', bodyColor:'#7da8c0',
+      borderColor:'rgba(56,189,248,.3)', borderWidth:1,
+      callbacks:{ label: ctx=>`  ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}M` }
+    }},
+    scales:{
+      x:{ grid:{color:gridColor}, ticks:{color:tickColor, font:{size:11}} },
+      y:{ grid:{color:gridColor}, ticks:{color:tickColor, font:{size:11},
+          callback:v=>`${v.toFixed(1)}M`} }
+    }
+  };
+
+  // ── Chart 1: Forecast vs Budget grouped bar ──
+  const c1 = document.getElementById('chartFCvsBGT');
+  if(c1){
+    if(c1._chart) c1._chart.destroy();
+    c1._chart = new Chart(c1, {
+      type:'bar',
+      data:{
+        labels,
+        datasets:[
+          { label:'Budget',   data:rows.map(r=>+r.infB.toFixed(3)),
+            backgroundColor:'rgba(56,189,248,.18)',
+            borderColor:'rgba(56,189,248,.5)', borderWidth:1,
+            borderRadius:3 },
+          { label:'Forecast', data:rows.map(r=>+r.inf.toFixed(3)),
+            backgroundColor: rows.map(r=>r.inf>=r.infB?'rgba(74,222,128,.7)':'rgba(248,113,113,.7)'),
+            borderColor:      rows.map(r=>r.inf>=r.infB?'#4ade80':'#f87171'),
+            borderWidth:1, borderRadius:3 },
+        ]
+      },
+      options:{...baseOpts}
+    });
+  }
+
+  // ── Chart 2: Net CF positive/negative bar ──
+  const c2 = document.getElementById('chartNetCF');
+  if(c2){
+    if(c2._chart) c2._chart.destroy();
+    c2._chart = new Chart(c2, {
+      type:'bar',
+      data:{
+        labels,
+        datasets:[{
+          label:'Net CF',
+          data: nets.map(v=>+v.toFixed(3)),
+          backgroundColor: nets.map(v=>v>=0?'rgba(74,222,128,.7)':'rgba(248,113,113,.7)'),
+          borderColor:      nets.map(v=>v>=0?'#4ade80':'#f87171'),
+          borderWidth:1, borderRadius:3
+        }]
+      },
+      options:{
+        ...baseOpts,
+        plugins:{...baseOpts.plugins,
+          annotation:{annotations:{
+            zero:{type:'line',yMin:0,yMax:0,borderColor:'rgba(56,189,248,.4)',borderWidth:1,borderDash:[4,4]}
+          }}
+        }
+      }
+    });
+    // Draw zero line manually via plugin
+    Chart.register({
+      id:'zeroline',
+      afterDraw(chart){
+        const {ctx,scales:{y,x}}=chart;
+        if(!y||!x) return;
+        const zero=y.getPixelForValue(0);
+        ctx.save();ctx.beginPath();
+        ctx.strokeStyle='rgba(56,189,248,.4)';ctx.lineWidth=1;
+        ctx.setLineDash([4,4]);
+        ctx.moveTo(x.left,zero);ctx.lineTo(x.right,zero);
+        ctx.stroke();ctx.restore();
+      }
+    });
+  }
+
+  // ── Chart 3: Bank Balance + Net CF line ──
+  const c3 = document.getElementById('chartBank');
+  if(c3){
+    if(c3._chart) c3._chart.destroy();
+    const bankData = rows.map(r=>r.bank);
+    const hasBank = bankData.some(v=>v!==null);
+    c3._chart = new Chart(c3, {
+      type:'line',
+      data:{
+        labels,
+        datasets:[
+          { label:'Bank Balance', data:bankData,
+            borderColor:'#06b6d4', backgroundColor:'rgba(6,182,212,.1)',
+            pointBackgroundColor: bankData.map(v=>v===null?'transparent':
+              v<THR.bankCrit?'#f87171':v<THR.bankLow?'#fbbf24':'#06b6d4'),
+            pointRadius:5, tension:.3, fill:true,
+            spanGaps:false },
+          { label:'Net CF', data:nets.map(v=>+v.toFixed(3)),
+            borderColor:'rgba(74,222,128,.7)', backgroundColor:'transparent',
+            borderDash:[5,3], pointRadius:3, tension:.3 }
+        ]
+      },
+      options:{
+        ...baseOpts,
+        plugins:{...baseOpts.plugins, legend:{
+          display:true,
+          labels:{color:tickColor, boxWidth:12, font:{size:11}}
+        }}
+      }
+    });
+  }
 }
 
 // ══════════════════════════════════════
