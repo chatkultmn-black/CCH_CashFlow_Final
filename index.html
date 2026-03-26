@@ -519,7 +519,18 @@ const lsGet = (k,d)=>{ try{ const v=localStorage.getItem(NS+k); return v!==null?
 const lsSet = (k,v)=>{ try{ localStorage.setItem(NS+k,JSON.stringify(v)); }catch{} };
 
 // โหลดจาก localStorage ก่อนเสมอ (เร็ว, offline-safe)
-const fc       = lsGet('fc',  { inflow:A(), cashSale:A(), prepay:A(), ar:A(), bank:A(), capex:A(), oe:A() });
+const fc       = lsGet('fc',  { inflow:A(), cashSale:A(), prepay:A(), ar:A(), bank:A(), capex:A(), oe:A(), incFee:A(), remit:A(), blwGOP:A(), mktFee:A(), baseMgt:A(), opEx:A() });
+// ensure new fields exist for older saved data
+if(!fc.incFee)  fc.incFee=A();
+if(!fc.remit)   fc.remit=A();
+if(!fc.blwGOP)  fc.blwGOP=A();
+if(!fc.mktFee)  fc.mktFee=A();
+if(!fc.baseMgt) fc.baseMgt=A();
+if(!fc.opEx)    fc.opEx=A();
+
+// Fixed rate constants
+const RATE_MKT  = 0.02;   // Marketing Fee = 2% of Inflow
+const RATE_BASE = 0.015;  // Base Mgmt Fee = 1.5% of Inflow
 const comments = lsGet('cmt', Array.from({length:12},()=>[]));
 let   audits   = lsGet('aud', []);
 let   PW       = lsGet('pw',  '1234');
@@ -632,12 +643,22 @@ function sum(a){ return a.reduce((t,v)=>t+(v||0),0); }
 function eff(f,b){ return f.map((v,i)=>v!==null?v:b[i]); }
 function ts(){ return new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
 function netCF(i){
-  const inf=eff(fc.inflow,BGT.inflow)[i];
-  const out=BGT.opEx[i]+BGT.mktFee[i]+BGT.baseMgt[i]+BGT.incFee[i]+BGT.remit[i]+BGT.blwGOP[i];
-  const cap=(fc.capex[i]??BGT.capex[i])+(fc.oe[i]??0);
-  return inf-out-cap;
+  const inf = eff(fc.inflow,BGT.inflow)[i];
+  const out = getOutflow(i);
+  const bel = getBelowRatios(i);
+  const cap = (fc.capex[i]??BGT.capex[i])+(fc.oe[i]??0);
+  return inf - out.total - bel.incFee - bel.remit - bel.blwGOP - cap;
 }
 function allNetCF(){ return MO.map((_,i)=>netCF(i)); }
+
+// ── Outflow helper: ทุกรายการ auto ratio, override ได้ ──
+function getOutflow(i){
+  const inf    = eff(fc.inflow,BGT.inflow)[i];
+  const opEx   = fc.opEx[i]   !== null ? fc.opEx[i]   : +(inf * (BGT.opEx[i]   / BGT.inflow[i])).toFixed(3);
+  const mktFee = fc.mktFee[i] !== null ? fc.mktFee[i] : +(inf * RATE_MKT).toFixed(3);
+  const baseMgt= fc.baseMgt[i]!== null ? fc.baseMgt[i]: +(inf * RATE_BASE).toFixed(3);
+  return { opEx, mktFee, baseMgt, total: opEx+mktFee+baseMgt };
+}
 
 // ══════════════════════════════════════
 // LOGIN / LOGOUT
@@ -801,26 +822,29 @@ function renderOv(){
 function buildSummaryTable(){
   const nets=allNetCF();
   const efInflow=eff(fc.inflow,BGT.inflow);
-  // Sub items: ใช้ getSubItems เพื่อรองรับ Auto calculation
   const efCashSale = MO.map((_,i)=>getSubItems(i).cashSale);
   const efPrepay   = MO.map((_,i)=>getSubItems(i).prepay);
   const efAR       = MO.map((_,i)=>getSubItems(i).ar);
+  // Below GOP — auto ratio or override
+  const efIncFee  = MO.map((_,i)=>getBelowRatios(i).incFee);
+  const efRemit   = MO.map((_,i)=>getBelowRatios(i).remit);
+  const efBlwGOP  = MO.map((_,i)=>getBelowRatios(i).blwGOP);
 
   const rows=[
     {t:'h',l:'CASH INFLOW'},
     {t:'s',l:'Total Inflow (FC)',    d:efInflow,   fkey:'inflow'},
-    {t:'s2',l:'— Cash Sale',         d:efCashSale},
-    {t:'s2',l:'— Prepayment',        d:efPrepay},
-    {t:'s2',l:'— AR Collection',     d:efAR},
+    {t:'s2',l:'— Cash Sale',         d:efCashSale, akey:'inflow'},
+    {t:'s2',l:'— Prepayment',        d:efPrepay,   akey:'inflow'},
+    {t:'s2',l:'— AR Collection',     d:efAR,       akey:'inflow'},
     {t:'h',l:'CASH OUTFLOW'},
-    {t:'s',l:'Operation Expenses',   d:BGT.opEx},
-    {t:'s',l:'Marketing Fee',        d:BGT.mktFee},
-    {t:'s',l:'Base Mgmt Fee',        d:BGT.baseMgt},
-    {t:'n',l:'NET FROM OPERATION',   d:MO.map((_,i)=>efInflow[i]-BGT.opEx[i]-BGT.mktFee[i]-BGT.baseMgt[i])},
+    {t:'s',l:'Operation Expenses',   d:MO.map((_,i)=>getOutflow(i).opEx),    okey:'opEx'},
+    {t:'s',l:'Marketing Fee (2%)',   d:MO.map((_,i)=>getOutflow(i).mktFee),  okey:'mktFee'},
+    {t:'s',l:'Base Mgmt Fee (1.5%)', d:MO.map((_,i)=>getOutflow(i).baseMgt), okey:'baseMgt'},
+    {t:'n',l:'NET FROM OPERATION',   d:MO.map((_,i)=>{ const o=getOutflow(i); return eff(fc.inflow,BGT.inflow)[i]-o.total; })},
     {t:'h',l:'BELOW GOP'},
-    {t:'s',l:'Incentive Fee',        d:BGT.incFee},
-    {t:'s',l:'Remittance to Owner',  d:BGT.remit},
-    {t:'s',l:'Below GOP Expense',    d:BGT.blwGOP},
+    {t:'s',l:'Incentive Fee',        d:efIncFee,  akey:'below'},
+    {t:'s',l:'Remittance to Owner',  d:efRemit,   akey:'below'},
+    {t:'s',l:'Below GOP Expense',    d:efBlwGOP,  akey:'below'},
     {t:'s',l:'Capex + OE (Actual)',  d:MO.map((_,i)=>(fc.capex[i]??BGT.capex[i])+(fc.oe[i]??0))},
     {t:'n',l:'NET CASH FLOW',        d:nets, key:'net'},
     {t:'cf',l:'BANK BALANCE (Actual)',d:fc.bank, key:'bank'},
@@ -832,20 +856,18 @@ function buildSummaryTable(){
     const tot=sum(r.d.map(v=>v??0));
     const cells=r.d.map((v,i)=>{
       let cc='';
-      if(r.key==='net'){
-        cc=v<THR.netCrit?'cell-crit':v<THR.netWarn?'cell-warn':v>=0?'cell-ok':'';
-      }
-      if(r.key==='bank'&&v!==null){
-        cc=v<THR.bankCrit?'cell-crit':v<THR.bankLow?'cell-warn':'cell-ok';
-      }
+      if(r.key==='net') cc=v<THR.netCrit?'cell-crit':v<THR.netWarn?'cell-warn':v>=0?'cell-ok':'';
+      if(r.key==='bank'&&v!==null) cc=v<THR.bankCrit?'cell-crit':v<THR.bankLow?'cell-warn':'cell-ok';
       if(r.fkey==='inflow'){
         const drop=BGT.inflow[i]>0?(v-BGT.inflow[i])/BGT.inflow[i]:0;
         cc=drop<THR.inflowCrit?'cell-crit':drop<THR.inflowWarn?'cell-warn':'';
       }
       const isFC = fc.inflow[i]!==null && (r.fkey==='inflow');
-      // Auto badge for sub items
-      const isAutoSub = r.t==='s2' && fc.inflow[i]!==null;
-      const autoBadge = isAutoSub?'<sup style="font-size:8px;color:var(--teal)"> A</sup>':'';
+      const isAutoInflow = r.akey==='inflow' && r.t==='s2' && fc.inflow[i]!==null;
+      const isAutoBelow  = r.akey==='below' && fc.inflow[i]!==null;
+      // mktFee/baseMgt auto when fc override is null
+      const isAutoOut = r.okey && r.okey!=='opEx' && fc[r.okey]&&fc[r.okey][i]===null && fc.inflow[i]!==null;
+      const autoBadge = (isAutoInflow||isAutoBelow||isAutoOut)?'<sup style="font-size:8px;color:var(--teal)"> A</sup>':'';
       return `<td class="${cc}">${fv(v)}${isFC?'<sup style="font-size:8px;color:var(--blue)"> F</sup>':''}${autoBadge}</td>`;
     }).join('');
     return`<tr class="${cls}"><td>${r.l}</td>${cells}<td class="tc">${fv(tot)}</td></tr>`;
@@ -897,7 +919,6 @@ function getBgtRatios(i){
 function getSubItems(i){
   const inf = fc.inflow[i];
   if(inf === null) {
-    // ยังไม่ได้กรอก → ใช้ Budget
     return { cashSale: BGT.cashSale[i], prepay: BGT.prepay[i], ar: BGT.ar[i], auto: false };
   }
   const r = getBgtRatios(i);
@@ -906,6 +927,33 @@ function getSubItems(i){
     prepay:   fc.prepay[i]   !== null ? fc.prepay[i]   : +(inf * r.prepay).toFixed(3),
     ar:       fc.ar[i]       !== null ? fc.ar[i]       : +(inf * r.ar).toFixed(3),
     auto: true,
+  };
+}
+
+// ══════════════════════════════════════
+// BELOW GOP AUTO-RATIO (based on Inflow)
+// ══════════════════════════════════════
+function getBelowRatiosDef(i){
+  const total = BGT.inflow[i];
+  if(!total) return {incFee:0, remit:0, blwGOP:0};
+  return {
+    incFee: BGT.incFee[i] / total,
+    remit:  BGT.remit[i]  / total,
+    blwGOP: BGT.blwGOP[i] / total,
+  };
+}
+
+// คืนค่า Below GOP ที่ใช้จริง — auto จาก ratio หรือ override
+function getBelowRatios(i){
+  const inf = fc.inflow[i];
+  if(inf === null){
+    return { incFee: BGT.incFee[i], remit: BGT.remit[i], blwGOP: BGT.blwGOP[i] };
+  }
+  const r = getBelowRatiosDef(i);
+  return {
+    incFee: fc.incFee[i] !== null ? fc.incFee[i] : +(inf * r.incFee).toFixed(3),
+    remit:  fc.remit[i]  !== null ? fc.remit[i]  : +(inf * r.remit).toFixed(3),
+    blwGOP: fc.blwGOP[i] !== null ? fc.blwGOP[i] : +(inf * r.blwGOP).toFixed(3),
   };
 }
 
@@ -1025,6 +1073,65 @@ function renderUpdBody(){
       </tbody>
     </table></div>
 
+    <!-- Cash Outflow -->
+    <div class="shdr">
+      <div class="stitle" style="color:var(--red)">💸 Cash Outflow — ${m}</div>
+    </div>
+    <div style="background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.15);border-radius:8px;
+         padding:9px 13px;margin-bottom:12px;font-size:12px;color:var(--red);line-height:1.6;">
+      💡 คำนวณอัตโนมัติจาก Inflow — กด <strong>✏️ แก้เอง</strong> เพื่อ override ได้ทุกรายการ<br>
+      <span style="color:var(--muted);font-size:11px">
+        Oper.Exp = สัดส่วน Budget &nbsp;|&nbsp;
+        Marketing Fee = <strong style="color:var(--red)">2%</strong> × Inflow &nbsp;|&nbsp;
+        Base Mgmt Fee = <strong style="color:var(--red)">1.5%</strong> × Inflow
+      </span>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>รายการ</th><th style="text-align:right">Budget (MB)</th><th style="text-align:right">Forecast (MB)</th><th style="text-align:right">Variance</th></tr></thead>
+      <tbody>
+        ${(()=>{
+          const out = getOutflow(i);
+          // helper สำหรับ auto-rate row
+          function outRow(label, fkey, bgtVal, val, rate, isFixed){
+            const isAuto = fc[fkey][i] === null;
+            const rateLabel = isFixed ? `<span style="font-size:9px;color:var(--faint);margin-left:4px">${(rate*100).toFixed(1)}% × Inflow</span>` : '';
+            const overBtn = inf!==null && isFixed
+              ? (isAuto
+                  ? `<button onclick="overrideSub('${fkey}',${i},${val.toFixed(3)})"
+                      style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid rgba(248,113,113,.3);
+                      background:rgba(248,113,113,.07);color:var(--red);cursor:pointer;margin-left:6px;font-family:'Noto Sans Thai',sans-serif;">
+                      ✏️ แก้เอง</button>`
+                  : `<button onclick="resetSub('${fkey}',${i})"
+                      style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid rgba(250,204,21,.3);
+                      background:rgba(250,204,21,.08);color:var(--yellow);cursor:pointer;margin-left:6px;font-family:'Noto Sans Thai',sans-serif;">
+                      🔄 Auto</button>`)
+              : '';
+            const valHtml = (isFixed && isAuto)
+              ? `<td style="color:var(--teal);font-family:'JetBrains Mono',monospace;font-size:11.5px;text-align:right;">
+                   ${val.toFixed(3)}<span style="font-size:9px;color:var(--faint);margin-left:3px">Auto</span></td>`
+              : `<td class="editable"><input class="cei" type="number" step="0.001"
+                   value="${val.toFixed(3)}" inputmode="decimal"
+                   onchange="onSubCell(this,'${fkey}',${i})"></td>`;
+            return `<tr>
+              <td><span style="color:var(--muted)">${label}</span>${rateLabel}${overBtn}</td>
+              <td style="color:var(--muted);text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px">${bgtVal.toFixed(3)}</td>
+              ${valHtml}
+              <td>${fd(bgtVal,val)}</td>
+            </tr>`;
+          }
+          return outRow('Operation Expenses','opEx',  BGT.opEx[i],   out.opEx,   BGT.opEx[i]/BGT.inflow[i],  true)
+               + outRow('Marketing Fee',    'mktFee', BGT.mktFee[i], out.mktFee, RATE_MKT,  true)
+               + outRow('Base Mgmt Fee',    'baseMgt',BGT.baseMgt[i],out.baseMgt,RATE_BASE, true);
+        })()}
+        <tr style="background:var(--surf2)">
+          <td style="font-size:11px;font-weight:600">Total Outflow (ex-Below GOP)</td>
+          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)">${(BGT.opEx[i]+BGT.mktFee[i]+BGT.baseMgt[i]).toFixed(3)}</td>
+          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--red)">${getOutflow(i).total.toFixed(3)}</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table></div>
+
     <!-- Bank Balance -->
     <div class="shdr">
       <div class="stitle" style="color:var(--teal)">🏦 Bank Balance — ${m}</div>
@@ -1038,6 +1145,60 @@ function renderUpdBody(){
             placeholder="0.000" inputmode="decimal" onchange="onCell(this,'bank',${i})"></td>
           <td style="font-size:11px;color:var(--muted)">กรอกยอดจริงจากธนาคาร</td>
         </tr>
+      </tbody>
+    </table></div>
+
+    <!-- Below GOP — auto ratio -->
+    <div class="shdr">
+      <div class="stitle" style="color:#a78bfa">📊 Below GOP — ${m}</div>
+    </div>
+    <div style="background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.18);border-radius:8px;
+         padding:9px 13px;margin-bottom:12px;font-size:12px;color:#a78bfa;line-height:1.6;">
+      💡 คำนวณอัตโนมัติจากสัดส่วน Budget ต่อ Inflow — กด <strong>✏️ แก้เอง</strong> เพื่อ override<br>
+      <span style="color:var(--muted);font-size:11px">
+        สัดส่วน Budget ${m}:
+        Incentive ${(getBelowRatiosDef(i).incFee*100).toFixed(1)}% &nbsp;|&nbsp;
+        Remittance ${(getBelowRatiosDef(i).remit*100).toFixed(1)}% &nbsp;|&nbsp;
+        Below GOP ${(getBelowRatiosDef(i).blwGOP*100).toFixed(1)}%
+      </span>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>รายการ</th><th style="text-align:right">Budget (MB)</th><th style="text-align:right">Forecast (MB)</th><th style="text-align:right">Variance</th></tr></thead>
+      <tbody>
+        ${(()=>{
+          const bel = getBelowRatios(i);
+          const rd  = getBelowRatiosDef(i);
+          return [
+            ['Incentive Fee',      'incFee', BGT.incFee[i],  bel.incFee,  fc.incFee[i]===null,  rd.incFee],
+            ['Remittance to Owner','remit',  BGT.remit[i],   bel.remit,   fc.remit[i]===null,   rd.remit],
+            ['Below GOP Expense',  'blwGOP', BGT.blwGOP[i],  bel.blwGOP,  fc.blwGOP[i]===null,  rd.blwGOP],
+          ].map(([label, fkey, bgtVal, val, isAuto, rat])=>{
+            const overBtn = inf!==null
+              ? (isAuto
+                  ? `<button onclick="overrideSub('${fkey}',${i},${val.toFixed(3)})"
+                      style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid rgba(167,139,250,.3);
+                      background:rgba(167,139,250,.08);color:#a78bfa;cursor:pointer;margin-left:6px;font-family:'Noto Sans Thai',sans-serif;">
+                      ✏️ แก้เอง</button>`
+                  : `<button onclick="resetSub('${fkey}',${i})"
+                      style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid rgba(250,204,21,.3);
+                      background:rgba(250,204,21,.08);color:var(--yellow);cursor:pointer;margin-left:6px;font-family:'Noto Sans Thai',sans-serif;">
+                      🔄 Auto</button>`)
+              : '';
+            const ratBadge = `<span style="font-size:9px;color:var(--faint);font-family:'JetBrains Mono',monospace;margin-left:4px">${(rat*100).toFixed(1)}%</span>`;
+            const valHtml = isAuto
+              ? `<td style="color:var(--teal);font-family:'JetBrains Mono',monospace;font-size:11.5px;text-align:right;">
+                   ${val.toFixed(3)}<span style="font-size:9px;color:var(--faint);margin-left:3px">Auto</span></td>`
+              : `<td class="editable"><input class="cei" type="number" step="0.001"
+                   value="${val.toFixed(3)}" inputmode="decimal"
+                   onchange="onSubCell(this,'${fkey}',${i})"></td>`;
+            return `<tr>
+              <td><span style="color:var(--muted)">${label}</span>${ratBadge}${overBtn}</td>
+              <td style="color:var(--muted);text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px">${bgtVal.toFixed(3)}</td>
+              ${valHtml}
+              <td>${fd(bgtVal,val)}</td>
+            </tr>`;
+          }).join('');
+        })()}
       </tbody>
     </table></div>
 
@@ -1146,12 +1307,22 @@ function onCell(el, key, idx){
 }
 
 function saveUpd(idx){
-  // บันทึก sub-items ที่คำนวณ auto ลงใน fc เพื่อให้ Summary Table ใช้ได้
-  const sub=getSubItems(idx);
   if(fc.inflow[idx]!==null){
+    // lock inflow sub-items
+    const sub=getSubItems(idx);
     if(fc.cashSale[idx]===null) fc.cashSale[idx]=sub.cashSale;
     if(fc.prepay[idx]===null)   fc.prepay[idx]=sub.prepay;
     if(fc.ar[idx]===null)       fc.ar[idx]=sub.ar;
+    // lock outflow auto rates
+    const out=getOutflow(idx);
+    if(fc.opEx[idx]===null)    fc.opEx[idx]=out.opEx;
+    if(fc.mktFee[idx]===null)  fc.mktFee[idx]=out.mktFee;
+    if(fc.baseMgt[idx]===null) fc.baseMgt[idx]=out.baseMgt;
+    // lock Below GOP auto values
+    const bel=getBelowRatios(idx);
+    if(fc.incFee[idx]===null) fc.incFee[idx]=bel.incFee;
+    if(fc.remit[idx]===null)  fc.remit[idx]=bel.remit;
+    if(fc.blwGOP[idx]===null) fc.blwGOP[idx]=bel.blwGOP;
   }
   saveAll();
   toast(`✅ บันทึก ${MO[idx]} เรียบร้อย`);
