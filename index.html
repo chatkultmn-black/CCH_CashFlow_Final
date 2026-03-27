@@ -611,7 +611,7 @@ async function pushToSheets(){
   try {
     const body = JSON.stringify({
       action: 'save',
-      data:   { fc, comments, audits: audits.slice(0,100) },
+      data:   { fc, comments, audits: audits.slice(0,100), pw: PW, pwchg: PWchg },
       savedAt: new Date().toISOString(),
     });
     const res  = await fetch(GAS_URL, { method:'POST', body });
@@ -644,7 +644,10 @@ async function pullFromSheets(){
         if(d.fc)       Object.assign(fc, d.fc);
         if(d.comments) d.comments.forEach((c,i)=>{ if(c) comments[i]=c; });
         if(d.audits)   { audits = d.audits; }
+        // ซิงค์รหัสผ่านด้วย
+        if(d.pw)       { PW = d.pw; PWchg = d.pwchg || false; }
         lsSet('fc',fc); lsSet('cmt',comments); lsSet('aud',audits);
+        lsSet('pw', PW); lsSet('pwchg', PWchg);
         lsSet('lastSync', new Date().toLocaleTimeString('th-TH'));
         setSyncTag('☁️ โหลดล่าสุดแล้ว', 'var(--green)');
         return true; // มีข้อมูลใหม่
