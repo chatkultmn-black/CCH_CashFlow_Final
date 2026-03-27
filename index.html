@@ -628,7 +628,7 @@ async function pushToSheets(){
   }
 }
 
-// PULL — โหลดข้อมูลล่าสุดจาก Google Sheets ตอน login
+// PULL — โหลดข้อมูลล่าสุดจาก Google Sheets ตอน login (ทุกครั้งเสมอ)
 async function pullFromSheets(){
   if(!GAS_URL) return false;
   setSyncTag('⟳ โหลดข้อมูล...', 'var(--yellow)');
@@ -637,27 +637,31 @@ async function pullFromSheets(){
     const json = await res.json();
     if(json.ok && json.data){
       const d = json.data;
-      // ถ้า remote ใหม่กว่า local → ใช้ remote
-      const remoteTs = new Date(d.savedAt||0).getTime();
-      const localTs  = new Date(lsGet('lastSync','1970')||'1970').getTime();
-      if(remoteTs > localTs || !lsGet('lastSync',null)){
-        if(d.fc)       Object.assign(fc, d.fc);
-        if(d.comments) d.comments.forEach((c,i)=>{ if(c) comments[i]=c; });
-        if(d.audits)   { audits = d.audits; }
-        // ซิงค์รหัสผ่านด้วย
-        if(d.pw)       { PW = d.pw; PWchg = d.pwchg || false; }
-        lsSet('fc',fc); lsSet('cmt',comments); lsSet('aud',audits);
-        lsSet('pw', PW); lsSet('pwchg', PWchg);
-        lsSet('lastSync', new Date().toLocaleTimeString('th-TH'));
-        setSyncTag('☁️ โหลดล่าสุดแล้ว', 'var(--green)');
-        return true; // มีข้อมูลใหม่
+      // โหลดข้อมูลจาก Sheets ทุกครั้ง ไม่เช็ค timestamp
+      if(d.fc){
+        Object.keys(d.fc).forEach(k=>{
+          if(fc[k] !== undefined) fc[k] = d.fc[k];
+        });
       }
-      setSyncTag('☁️ ข้อมูลทันสมัยแล้ว', 'var(--green)');
+      if(d.comments && d.comments.length === 12){
+        d.comments.forEach((c,i)=>{ if(c) comments[i]=c; });
+      }
+      if(d.audits && d.audits.length > 0){ audits = d.audits; }
+      // โหลดรหัสผ่านด้วย
+      if(d.pw){ PW = d.pw; PWchg = d.pwchg || false; }
+      // บันทึกลง localStorage
+      lsSet('fc',fc); lsSet('cmt',comments); lsSet('aud',audits);
+      lsSet('pw',PW); lsSet('pwchg',PWchg);
+      lsSet('lastSync', new Date().toLocaleTimeString('th-TH'));
+      setSyncTag('☁️ Synced ' + lsGet('lastSync',''), 'var(--green)');
+      return true;
+    }
+    if(json.empty || !json.data){
+      setSyncTag('☁️ ยังไม่มีข้อมูลใน Sheets', 'var(--muted)');
       return false;
     }
-    if(json.empty) { setSyncTag('☁️ Sheets ว่าง — push ครั้งแรก', 'var(--muted)'); return false; }
   } catch(e){
-    setSyncTag('📂 ทำงาน Offline', 'var(--muted)');
+    setSyncTag('📂 Offline — ใช้ข้อมูลในเครื่อง', 'var(--muted)');
   }
   return false;
 }
